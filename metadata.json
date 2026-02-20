@@ -1,0 +1,5 @@
+{
+  "name": "Freepik AI Video Bot",
+  "description": "Telegram bot that generates videos from images using Freepik AI API with model selection and daily quotas.",
+  "requestFramePermissions": []
+}
