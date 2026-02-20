@@ -13,27 +13,40 @@ const PORT = 3000;
 const DAILY_LIMIT = 50;
 
 // User state tracking
-const userStates = new Map<number, { photoId: string; caption: string; model?: string; duration?: string }>();
+const userStates = new Map<number, { photoId?: string; caption?: string; model?: string; duration?: string }>();
 
 const MODELS = [
+  { id: "seedance_pro", name: "Seedance Pro" },
+  { id: "seedance_1.5", name: "Seedance 1.5" },
   { id: "kling_v2.1_std", name: "Kling v2.1 Std" },
   { id: "kling_v2.1_pro", name: "Kling v2.1 Pro" },
   { id: "kling_v2.5_pro", name: "Kling v2.5 Pro" },
   { id: "kling_v2.6_pro", name: "Kling v2.6 Pro" },
   { id: "hailuo_2.3", name: "Hailuo 2.3" },
-  { id: "seedance_pro", name: "Seedance Pro" },
-  { id: "seedance_1.5", name: "Seedance 1.5" },
+  { id: "wan_v2.6_hd", name: "WAN v2.6 HD" },
 ];
 
 const DURATIONS = ["5", "10"];
 
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, "Halo! Kirimkan foto dengan caption untuk mulai generate video AI.\n\nKuota harian: 50 video.");
+  const chatId = msg.chat.id;
+  const modelButtons = MODELS.map((m) => [{ text: m.name, callback_data: `model:${m.id}` }]);
+
+  bot.sendMessage(chatId, "Selamat datang! Silakan pilih model video untuk memulai:", {
+    reply_markup: {
+      inline_keyboard: modelButtons,
+    },
+  });
 });
 
 bot.on("photo", async (msg) => {
   const chatId = msg.chat.id;
   const user = getUser(chatId.toString());
+  const state = userStates.get(chatId);
+
+  if (!state || !state.model || !state.duration) {
+    return bot.sendMessage(chatId, "Silakan pilih model dan durasi terlebih dahulu dengan mengetik /start");
+  }
 
   if (user.daily_count >= DAILY_LIMIT) {
     return bot.sendMessage(chatId, "Maaf, kuota harian Anda (50 video) sudah habis. Silakan coba lagi besok.");
@@ -44,15 +57,31 @@ bot.on("photo", async (msg) => {
 
   if (!photo) return;
 
-  userStates.set(chatId, { photoId: photo.file_id, caption });
+  state.photoId = photo.file_id;
+  state.caption = caption;
+  userStates.set(chatId, state);
 
-  const modelButtons = MODELS.map((m) => [{ text: m.name, callback_data: `model:${m.id}` }]);
+  bot.sendMessage(chatId, "⏳ Sedang memproses gambar...");
 
-  bot.sendMessage(chatId, "Pilih Model Video:", {
-    reply_markup: {
-      inline_keyboard: modelButtons,
-    },
-  });
+  try {
+    // Get file link from Telegram
+    const file = await bot.getFile(state.photoId);
+    const imageUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+
+    // Start generation
+    const jobId = await generateVideo(imageUrl, state.caption, state.model!, state.duration!);
+    saveJob(chatId.toString(), jobId, state.model!, state.caption);
+    incrementUserCount(chatId.toString());
+
+    bot.sendMessage(chatId, "🚀 Video sedang di-generate. Mohon tunggu, ini mungkin memakan waktu beberapa menit...");
+
+    // Start Polling
+    pollStatus(chatId, jobId);
+    userStates.delete(chatId);
+  } catch (error: any) {
+    bot.sendMessage(chatId, `❌ Gagal: ${error.message}`);
+    userStates.delete(chatId);
+  }
 });
 
 bot.on("callback_query", async (query) => {
@@ -60,11 +89,7 @@ bot.on("callback_query", async (query) => {
   if (!chatId) return;
 
   const data = query.data || "";
-  const state = userStates.get(chatId);
-
-  if (!state) {
-    return bot.answerCallbackQuery(query.id, { text: "Sesi kadaluarsa. Silakan kirim foto lagi." });
-  }
+  let state = userStates.get(chatId) || {};
 
   if (data.startsWith("model:")) {
     const modelId = data.split(":")[1];
@@ -83,35 +108,14 @@ bot.on("callback_query", async (query) => {
   } else if (data.startsWith("dur:")) {
     const duration = data.split(":")[1];
     state.duration = duration;
+    userStates.set(chatId, state);
     
-    bot.answerCallbackQuery(query.id, { text: "Memulai proses..." });
-    bot.editMessageText("⏳ Sedang memproses gambar...", {
+    bot.answerCallbackQuery(query.id, { text: "Durasi dipilih!" });
+    bot.editMessageText(`Model: ${MODELS.find(m => m.id === state.model)?.name}\nDurasi: ${duration} Detik\n\nSekarang silakan kirim **Foto** dengan **Caption** untuk generate video.`, {
       chat_id: chatId,
       message_id: query.message?.message_id,
+      parse_mode: "Markdown"
     });
-
-    try {
-      // Get file link from Telegram
-      const file = await bot.getFile(state.photoId);
-      const imageUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-
-      // Start generation
-      const jobId = await generateVideo(imageUrl, state.caption, state.model!, state.duration!);
-      saveJob(chatId.toString(), jobId, state.model!, state.caption);
-      incrementUserCount(chatId.toString());
-
-      bot.editMessageText("🚀 Video sedang di-generate. Mohon tunggu, ini mungkin memakan waktu beberapa menit...", {
-        chat_id: chatId,
-        message_id: query.message?.message_id,
-      });
-
-      // Start Polling
-      pollStatus(chatId, jobId);
-      userStates.delete(chatId);
-    } catch (error: any) {
-      bot.sendMessage(chatId, `❌ Gagal: ${error.message}`);
-      userStates.delete(chatId);
-    }
   }
 });
 
