@@ -6,7 +6,22 @@ import { generateVideo, checkVideoStatus } from "./src/freepik.ts";
 import axios from "axios";
 
 const token = process.env.TELEGRAM_BOT_TOKEN || "";
-const bot = new TelegramBot(token, { polling: true });
+const bot = new TelegramBot(token, { polling: false });
+
+// Handle 409 Conflict by dropping pending updates
+bot.deleteWebHook({ drop_pending_updates: true }).then(() => {
+  bot.startPolling();
+  console.log("Bot polling started (pending updates dropped)");
+});
+
+// Global polling error handler
+bot.on("polling_error", (error: any) => {
+  console.error("Polling error:", error.code, error.message);
+  if (error.code === "ETELEGRAM" && error.message.includes("409 Conflict")) {
+    console.warn("409 Conflict detected. Another instance might be running.");
+  }
+});
+
 const app = express();
 const PORT = 3000;
 
